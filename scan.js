@@ -24,7 +24,7 @@ async function scanWallet(provider, address, tokens) {
         contract.balanceOf(address),
         contract.decimals(),
       ]);
-      const scaled = formatUnits(raw, decimals);
+      const scaled = Number(formatUnits(raw, decimals));
       balances.push({ symbol: t.symbol, address: t.address, balance: scaled });
     } catch (err) {
       balances.push({

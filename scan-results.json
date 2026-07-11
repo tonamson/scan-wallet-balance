@@ -1,12 +1,12 @@
 [
   {
     "address": "0x1e73C9207e0EE5071c1963784Ed772EC9B1F14Dc",
-    "scannedAt": "2026-07-11T10:35:34.728Z",
+    "scannedAt": "2026-07-11T10:37:45.209Z",
     "tokens": [
       {
         "symbol": "USDT",
         "address": "0x55d398326f99059fF775485246999027B3197955",
-        "balance": "0.0"
+        "balance": 0
       }
     ]
   }
