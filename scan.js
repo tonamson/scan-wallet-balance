@@ -1,13 +1,13 @@
 const fs = require("fs");
 const path = require("path");
-const { JsonRpcProvider, Contract } = require("ethers");
-const { formatUnits } = require("ethers");
+const { JsonRpcProvider, Contract, formatEther } = require("ethers");
 
 // ponytail: BSC mainnet RPC. Swap/add backups if rate-limited.
 const RPC_URL = process.env.RPC_URL || "https://bsc-dataseed.binance.org";
 const WALLETS_DIR = path.join(__dirname, "wallets");
 const TOKENS_FILE = path.join(__dirname, "tokens.json");
 const OUT_FILE = path.join(__dirname, "scan-results.json");
+const OUT_DIR = path.join(__dirname, "scan-result");
 
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
@@ -15,8 +15,31 @@ const ERC20_ABI = [
   "function symbol() view returns (string)",
 ];
 
+// walk wallets/<workspace>/<address>.json, ignore dotfiles (e.g. .DS_Store)
+function listWalletFiles() {
+  const out = [];
+  for (const ws of fs.readdirSync(WALLETS_DIR)) {
+    if (ws.startsWith(".")) continue;
+    const wsPath = path.join(WALLETS_DIR, ws);
+    if (!fs.statSync(wsPath).isDirectory()) continue;
+    for (const f of fs.readdirSync(wsPath)) {
+      if (!f.endsWith(".json")) continue;
+      out.push({ workspace: ws, file: path.join(wsPath, f) });
+    }
+  }
+  return out;
+}
+
 async function scanWallet(provider, address, tokens) {
+  // native BNB first
   const balances = [];
+  try {
+    const raw = await provider.getBalance(address);
+    balances.push({ symbol: "BNB", balance: Number(formatEther(raw)) });
+  } catch (err) {
+    balances.push({ symbol: "BNB", balance: null, error: err.shortMessage || err.message });
+  }
+
   for (const t of tokens) {
     const contract = new Contract(t.address, ERC20_ABI, provider);
     try {
@@ -24,7 +47,7 @@ async function scanWallet(provider, address, tokens) {
         contract.balanceOf(address),
         contract.decimals(),
       ]);
-      const scaled = Number(formatUnits(raw, decimals));
+      const scaled = Number(decimals ? raw / 10n ** BigInt(decimals) : raw);
       balances.push({ symbol: t.symbol, address: t.address, balance: scaled });
     } catch (err) {
       balances.push({
@@ -67,37 +90,57 @@ async function loadTokens(provider) {
 async function main() {
   const provider = new JsonRpcProvider(RPC_URL);
   const tokens = await loadTokens(provider);
-  const files = fs.readdirSync(WALLETS_DIR).filter((f) => f.endsWith(".json"));
+  const walletFiles = listWalletFiles();
 
+  // group workspaces: { workspace: [ { address, scannedAt, tokens } ] }
   const existing = fs.existsSync(OUT_FILE)
-    ? JSON.parse(fs.readFileSync(OUT_FILE, "utf8"))
-    : [];
+    ? new Map(JSON.parse(fs.readFileSync(OUT_FILE, "utf8")).map((e) => [e.workspace, e.wallets]))
+    : new Map();
 
-  for (const file of files) {
-    const wallet = JSON.parse(fs.readFileSync(path.join(WALLETS_DIR, file), "utf8"));
-    const address = wallet.address;
+  let count = 0;
+  let skipped = 0;
+  for (const { workspace, file } of walletFiles) {
+    // ponytail: address = filename, file has no address field.
+    const address = path.basename(file, ".json");
     const scannedAt = new Date().toISOString();
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
 
     try {
       const balances = await scanWallet(provider, address, tokens);
-      // ponytail: append new entry each run. Uniqueness by (address + scannedAt).
-      // If you want only one record per wallet, replace existing address instead.
-      const idx = existing.findIndex((e) => e.address === address);
-      const entry = { address, scannedAt, tokens: balances };
-      if (idx >= 0) existing[idx] = entry;
-      else existing.push(entry);
+      const funded = balances.filter((b) => b.balance && b.balance > 0);
+      if (!funded.length) {
+        skipped++;
+        console.log(`[${workspace}] ${address} empty, skip`);
+        continue;
+      }
 
-      console.log(`${address} @ ${scannedAt}`);
+      // ponytail: spread full wallet (privateKey/mnemonic/etc) + balances.
+      const list = existing.get(workspace) || [];
+      const idx = list.findIndex((e) => e.address === address);
+      const entry = { ...raw, address, scannedAt, tokens: balances };
+      if (idx >= 0) list[idx] = entry;
+      else list.push(entry);
+      existing.set(workspace, list);
+      count++;
+
+      // write scan-result/<workspace>/<address>.json
+      const wsDir = path.join(OUT_DIR, workspace);
+      fs.mkdirSync(wsDir, { recursive: true });
+      fs.writeFileSync(path.join(wsDir, `${address}.json`), JSON.stringify(entry, null, 2));
+
+      console.log(`[${workspace}] ${address} @ ${scannedAt}`);
       for (const b of balances) {
         console.log(`  ${b.symbol}: ${b.balance ?? "error"}`);
       }
     } catch (err) {
-      console.error(`Failed ${address}: ${err.shortMessage || err.message}`);
+      console.error(`Failed ${workspace}/${address}: ${err.shortMessage || err.message}`);
     }
   }
 
-  fs.writeFileSync(OUT_FILE, JSON.stringify(existing, null, 2));
-  console.log(`\nWritten ${existing.length} wallet(s) to ${OUT_FILE}`);
+  const out = [...existing.entries()].map(([workspace, wallets]) => ({ workspace, wallets }));
+  fs.writeFileSync(OUT_FILE, JSON.stringify(out, null, 2));
+  console.log(`\nWritten ${count} funded (${skipped} empty skipped) across ${out.length} workspace(s)`);
+  console.log(`scan-results.json + scan-result/<workspace>/<address>.json`);
 }
 
 main().catch((e) => {

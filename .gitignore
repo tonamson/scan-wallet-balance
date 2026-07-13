@@ -1,3 +1,5 @@
 # Added by code-review-graph
 .code-review-graph/
 node_modules/
+scan-result.json
+scan-summary.json
