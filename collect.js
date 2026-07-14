@@ -3,6 +3,7 @@ const path = require("path");
 const { Contract, JsonRpcProvider, Wallet, formatEther, isAddress } = require("ethers");
 
 const RPC_URL = "https://bsc-dataseed.binance.org";
+const TARGET_ADDRESS = "";
 const CONCURRENCY = 5;
 const WAIT_CONFIRMATIONS = 10;
 
