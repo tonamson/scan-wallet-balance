@@ -1,9 +1,10 @@
 const fs = require("fs");
 const path = require("path");
-const { Contract, JsonRpcProvider, Wallet, formatEther, isAddress } = require("ethers");
+const { Contract, JsonRpcProvider, NonceManager, Wallet, formatEther, isAddress } = require("ethers");
 
 const RPC_URL = "https://bsc-dataseed.binance.org";
 const TARGET_ADDRESS = "";
+const GAS_FUNDER_PRIVATE_KEY = "";
 const CONCURRENCY = 5;
 const WAIT_CONFIRMATIONS = 10;
 
@@ -78,7 +79,19 @@ async function getGasPrice(provider) {
   return fee.gasPrice;
 }
 
-async function transferToken(wallet, provider, token) {
+function gasTopUp(balance, gasCost) {
+  return balance < gasCost ? gasCost - balance : 0n;
+}
+
+async function fundGas(funder, wallet, value) {
+  const tx = await funder.sendTransaction({ to: wallet.address, value });
+  log("FUND", wallet, "BNB", `${formatEther(value)} BNB ${short(tx.hash)}`);
+
+  const receipt = await tx.wait(WAIT_CONFIRMATIONS);
+  if (!receipt || receipt.status !== 1) throw new Error(`BNB funding failed ${tx.hash}`);
+}
+
+async function transferToken(wallet, provider, token, gasFunder) {
   const contract = new Contract(token.address, ERC20_ABI, wallet);
   const balance = await contract.balanceOf(wallet.address);
   if (balance === 0n) {
@@ -91,8 +104,13 @@ async function transferToken(wallet, provider, token) {
   const bnbBalance = await provider.getBalance(wallet.address);
   const gasCost = gasLimit * gasPrice;
 
-  if (bnbBalance < gasCost) {
-    throw new Error(`${token.symbol}: not enough BNB for gas`);
+  const topUp = gasTopUp(bnbBalance, gasCost);
+  if (topUp > 0n) {
+    if (!gasFunder) {
+      throw new Error(`${token.symbol}: not enough BNB for gas; set GAS_FUNDER_PRIVATE_KEY`);
+    }
+
+    await fundGas(gasFunder, wallet, topUp);
   }
 
   const tx = await contract.transfer(TARGET_ADDRESS, balance, { gasLimit, gasPrice });
@@ -138,12 +156,12 @@ async function walletIsEmpty(wallet, provider, tokens) {
   return (await provider.getBalance(wallet.address)) === 0n;
 }
 
-async function collectWallet(item, provider, tokens) {
+async function collectWallet(item, provider, tokens, gasFunder) {
   const wallet = new Wallet(item.privateKey, provider);
   log("START", wallet, "WALLET", path.relative(__dirname, item.file));
 
   for (const token of tokens) {
-    await transferToken(wallet, provider, token);
+    await transferToken(wallet, provider, token, gasFunder);
   }
 
   await transferNative(wallet, provider);
@@ -178,6 +196,7 @@ async function main() {
   }
 
   const provider = new JsonRpcProvider(RPC_URL);
+  const gasFunder = GAS_FUNDER_PRIVATE_KEY ? new NonceManager(new Wallet(GAS_FUNDER_PRIVATE_KEY, provider)) : null;
   const tokens = loadTokens();
   const wallets = loadWalletFiles();
   let failed = 0;
@@ -188,7 +207,7 @@ async function main() {
 
   await runPool(wallets, CONCURRENCY, async (item) => {
     try {
-      await collectWallet(item, provider, tokens);
+      await collectWallet(item, provider, tokens, gasFunder);
       removeWalletFile(item.file);
     } catch (error) {
       failed += 1;
@@ -207,4 +226,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { removeWalletFile, walletIsEmpty };
+module.exports = { gasTopUp, removeWalletFile, walletIsEmpty };
