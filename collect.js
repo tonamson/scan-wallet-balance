@@ -3,9 +3,9 @@ const path = require("path");
 const { Contract, JsonRpcProvider, Wallet, formatEther, isAddress } = require("ethers");
 
 const RPC_URL = "https://bsc-dataseed.binance.org";
-const TARGET_ADDRESS = "0xFfbF500e9637fa82F10b3C7d62dc9B9934254888";
-const CONCURRENCY = 1;
-const WAIT_CONFIRMATIONS = 6;
+const TARGET_ADDRESS = "";
+const CONCURRENCY = 5;
+const WAIT_CONFIRMATIONS = 10;
 
 const SCAN_DIR = path.join(__dirname, "scan-result");
 const TOKENS_FILE = path.join(__dirname, "tokens.json");
