@@ -3,7 +3,6 @@ const path = require("path");
 const { Contract, JsonRpcProvider, Wallet, formatEther, isAddress } = require("ethers");
 
 const RPC_URL = "https://bsc-dataseed.binance.org";
-const TARGET_ADDRESS = "";
 const CONCURRENCY = 5;
 const WAIT_CONFIRMATIONS = 10;
 
@@ -130,6 +129,14 @@ async function transferNative(wallet, provider) {
   log("OK", wallet, "BNB", `block ${receipt.blockNumber} +${WAIT_CONFIRMATIONS}`);
 }
 
+async function walletIsEmpty(wallet, provider, tokens) {
+  for (const token of tokens) {
+    if ((await new Contract(token.address, ERC20_ABI, wallet).balanceOf(wallet.address)) > 0n) return false;
+  }
+
+  return (await provider.getBalance(wallet.address)) === 0n;
+}
+
 async function collectWallet(item, provider, tokens) {
   const wallet = new Wallet(item.privateKey, provider);
   log("START", wallet, "WALLET", path.relative(__dirname, item.file));
@@ -139,6 +146,12 @@ async function collectWallet(item, provider, tokens) {
   }
 
   await transferNative(wallet, provider);
+  if (!(await walletIsEmpty(wallet, provider, tokens))) throw new Error("wallet balance remains");
+}
+
+function removeWalletFile(file) {
+  fs.unlinkSync(file);
+  log("OK", null, "FILE", `removed ${path.relative(__dirname, file)}`);
 }
 
 async function runPool(items, limit, worker) {
@@ -175,6 +188,7 @@ async function main() {
   await runPool(wallets, CONCURRENCY, async (item) => {
     try {
       await collectWallet(item, provider, tokens);
+      removeWalletFile(item.file);
     } catch (error) {
       failed += 1;
       logError(item.file, error.message);
@@ -185,7 +199,11 @@ async function main() {
   log(failed > 0 ? "WARN" : "OK", null, "DONE", `failed=${failed}`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { removeWalletFile, walletIsEmpty };
